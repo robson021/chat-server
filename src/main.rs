@@ -4,12 +4,12 @@ use crate::user_cache::{Shared, Socket};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::Sender;
+use tokio::sync::{broadcast, Mutex};
 
 const HOST: &str = "localhost:8080";
 
@@ -26,14 +26,14 @@ async fn main() {
     loop {
         match listener.accept().await {
             Ok((socket, addr)) => {
-                handle_connection(socket, addr, tx.clone(), Arc::clone(&user_cache))
+                handle_connection(socket, addr, tx.clone(), Arc::clone(&user_cache)).await
             }
             Err(e) => eprintln!("Could not get client: {:?}", e),
         }
     }
 }
 
-fn handle_connection(
+async fn handle_connection(
     mut socket: TcpStream,
     addr: SocketAddr,
     tx: Sender<(String, SocketAddr)>,
@@ -45,16 +45,9 @@ fn handle_connection(
         .map(char::from)
         .collect();
 
-    match user_cache.lock() {
-        Ok(mut mutex) => {
-            println!("New user added to the cache: {}.", id);
-            mutex.clients.insert(addr.to_string(), id.clone());
-        }
-        Err(_) => {
-            eprintln!("Could not connect add new user.");
-            return;
-        }
-    }
+    println!("Adding new user to the cache: {}.", id);
+    user_cache.lock().await.clients.insert(addr.to_string(), id);
+
     tokio::spawn(async move {
         println!("New connection from {:?}", addr);
 
@@ -68,7 +61,7 @@ fn handle_connection(
             select! {
                 result = reader.read_line(&mut line) => {
                     if result.is_err() || result.unwrap() == 0 {
-                        let user = user_cache.lock().unwrap().clients.remove(&addr.to_string());
+                        let user = user_cache.lock().await.clients.remove(&addr.to_string());
                         println!("Client disconnected: {:?}", user.unwrap());
                         break;
                     }
@@ -79,7 +72,7 @@ fn handle_connection(
                 result = rx.recv() => {
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       let msg = get_message(&msg, &user_cache, sender_addr.to_string());
+                       let msg = get_message(&msg, &user_cache, sender_addr.to_string()).await;
                        writer.write_all(msg.as_bytes()).await.unwrap();
                     }
                 }
@@ -88,11 +81,9 @@ fn handle_connection(
     });
 }
 
-fn get_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Socket) -> String {
-    let mut string = match cache.lock() {
-        Ok(mutex) => mutex.clients.get(&socket).unwrap().to_string(),
-        Err(_) => String::from("unknown"),
-    };
+async fn get_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Socket) -> String {
+    let guard = cache.lock().await;
+    let mut string = guard.clients.get(&socket).unwrap().clone();
     string.push_str(": ");
     string.push_str(msg);
     string
