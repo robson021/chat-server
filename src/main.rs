@@ -61,8 +61,11 @@ async fn handle_connection(
             select! {
                 result = reader.read_line(&mut line) => {
                     if result.is_err() || result.unwrap() == 0 {
-                        let user = user_cache.lock().await.clients.remove(&addr.to_string());
-                        println!("Client disconnected: {:?}", user.unwrap());
+                        let user = match user_cache.lock().await.clients.remove(&addr.to_string()) {
+                            Some(id) => id,
+                            None => "unknown".to_owned(),
+                        };
+                        println!("Client disconnected: {:?}", user);
                         break;
                     }
                     let msg = (line.clone(), addr);
@@ -72,7 +75,7 @@ async fn handle_connection(
                 result = rx.recv() => {
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       let msg = get_message(&msg, &user_cache, sender_addr.to_string()).await;
+                       let msg = get_response_message(&msg, &user_cache, sender_addr.to_string()).await;
                        writer.write_all(msg.as_bytes()).await.unwrap();
                     }
                 }
@@ -81,10 +84,36 @@ async fn handle_connection(
     });
 }
 
-async fn get_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Socket) -> String {
-    let guard = cache.lock().await;
-    let mut string = guard.clients.get(&socket).unwrap().clone();
+async fn get_response_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Socket) -> String {
+    let id = match cache.lock().await.clients.get(&socket) {
+        Some(id) => id.clone(),
+        None => "unknown".to_owned(),
+    };
+
+    let mut string = id;
     string.push_str(": ");
     string.push_str(msg);
     string
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::user_cache::UserID;
+
+    #[tokio::test]
+    async fn should_build_response_msg() {
+        // given
+        let socket: Socket = "socket-id".into();
+        let id: UserID = "test-id".into();
+
+        let cache = user_cache::new_cache();
+        cache.lock().await.clients.insert(socket.clone(), id);
+
+        // when
+        let msg = get_response_message("base-msg", &cache, socket).await;
+
+        // then
+        assert_eq!("test-id: base-msg", msg);
+    }
 }
