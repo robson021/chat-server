@@ -1,5 +1,8 @@
+mod cleaning_task;
 mod user_cache;
 
+use std::cmp::min;
+use std::collections::VecDeque;
 use crate::user_cache::{Shared, Socket};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
@@ -10,6 +13,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::broadcast::Sender;
 use tokio::sync::{broadcast, Mutex};
+use tokio_schedule::Job;
 
 const HOST: &str = "localhost:8080";
 
@@ -22,6 +26,18 @@ async fn main() {
 
     // todo: concurrent map based on read-write lock will be more performant
     let user_cache: Arc<Mutex<Shared>> = user_cache::new_cache();
+
+    let mut q = VecDeque::from([1, 2 ,3]);
+    q.push_back(4);
+    q.push_back(5);
+    q.push_back(6);
+
+    q.drain(.. min(q.len(), 50));
+
+    println!("Queue: {:?}", q);
+
+    let history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // cleaning_task::clean(Arc::clone(&history), 1);
 
     loop {
         match listener.accept().await {
