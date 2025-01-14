@@ -2,8 +2,6 @@ mod cache;
 mod cleaning_task;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
-use rand::distributions::Alphanumeric;
-use rand::Rng;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -46,15 +44,6 @@ async fn handle_connection(
     user_cache: Arc<Mutex<SharedClientCache>>,
     chat_history: Arc<Mutex<ChatHistory>>,
 ) {
-    let id: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect();
-
-    println!("Adding new user to the cache: {}.", id);
-    user_cache.lock().await.clients.insert(addr.to_string(), id);
-
     tokio::spawn(async move {
         println!("New connection from {:?}", addr);
 
@@ -63,6 +52,24 @@ async fn handle_connection(
 
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
+
+        writer
+            .write_all("Enter nickname: ".as_bytes())
+            .await
+            .unwrap();
+        reader.read_line(&mut line).await.unwrap();
+
+        let id = line.trim().to_owned();
+        line.clear();
+
+        println!("Adding new user to the cache: {}.", id);
+        user_cache.lock().await.clients.insert(addr.to_string(), id);
+
+        let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
+        let mut old_messages = old_messages.join("");
+        old_messages.push_str("+--------------------------------------+\r\n");
+
+        writer.write_all(old_messages.as_bytes()).await.unwrap();
 
         loop {
             select! {
@@ -82,8 +89,7 @@ async fn handle_connection(
                     line.clear();
                 }
                 result = rx.recv() => {
-                    println!("History: {:?}", chat_history.lock().await.history);
-
+                    // println!("History: {:?}", chat_history.lock().await.history);
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
                        // let msg = get_response_message(&msg, &user_cache, sender_addr.to_string()).await;
