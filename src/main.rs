@@ -115,6 +115,7 @@ async fn get_response_message(
     let mut string = id;
     string.push_str(": ");
     string.push_str(msg.trim());
+    info!("Message: {}", string);
     string.push_str("\r\n");
     string
 }
