@@ -1,10 +1,9 @@
 mod cache;
 mod cleaning_task;
 
-use crate::cache::{SharedClientCache, Socket};
+use crate::cache::{ChatHistory, SharedClientCache, Socket};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -20,18 +19,20 @@ async fn main() {
     let listener = TcpListener::bind(HOST).await.unwrap();
     let (tx, _rx) = broadcast::channel::<(String, SocketAddr)>(8);
 
-    println!("Running on {}", HOST);
-
     // todo: collections based on read-write lock will be more performant
-    let user_cache: Arc<Mutex<SharedClientCache>> = cache::new_cache();
-    let history: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let user_cache = SharedClientCache::new_cache();
+    let chat_history = ChatHistory::new_chat_history();
 
-    cleaning_task::clean(Arc::clone(&history), 3);
+    // cleaning_task::clean(&mut history, 3).await;
+
+    println!("Running on {}", HOST);
 
     loop {
         match listener.accept().await {
             Ok((socket, addr)) => {
-                handle_connection(socket, addr, tx.clone(), Arc::clone(&user_cache)).await
+                let user_cache = Arc::clone(&user_cache);
+                let chat_history = Arc::clone(&chat_history);
+                handle_connection(socket, addr, tx.clone(), user_cache, chat_history).await
             }
             Err(e) => eprintln!("Could not get client: {:?}", e),
         }
@@ -43,6 +44,7 @@ async fn handle_connection(
     addr: SocketAddr,
     tx: Sender<(String, SocketAddr)>,
     user_cache: Arc<Mutex<SharedClientCache>>,
+    chat_history: Arc<Mutex<ChatHistory>>,
 ) {
     let id: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -73,14 +75,18 @@ async fn handle_connection(
                         println!("Client disconnected: {:?}", user);
                         break;
                     }
-                    let msg = (line.clone(), addr);
+                    let formatted_text = get_response_message(line.as_str(), &user_cache, addr.to_string()).await;
+                    let msg = (formatted_text.clone(), addr);
+                    chat_history.lock().await.insert(formatted_text.clone());
                     tx.send(msg).unwrap();
                     line.clear();
                 }
                 result = rx.recv() => {
+                    println!("History: {:?}", chat_history.lock().await.history);
+
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       let msg = get_response_message(&msg, &user_cache, sender_addr.to_string()).await;
+                       // let msg = get_response_message(&msg, &user_cache, sender_addr.to_string()).await;
                        writer.write_all(msg.as_bytes()).await.unwrap();
                     }
                 }
@@ -95,13 +101,14 @@ async fn get_response_message(
     socket: Socket,
 ) -> String {
     let id = match cache.lock().await.clients.get(&socket) {
-        Some(id) => id.clone(),
-        None => "unknown".to_owned(),
+        Some(id) => format!("[{}]", id),
+        None => "[unknown]".to_owned(),
     };
 
     let mut string = id;
     string.push_str(": ");
-    string.push_str(msg);
+    string.push_str(msg.trim());
+    string.push_str("\r\n");
     string
 }
 
@@ -116,13 +123,13 @@ mod tests {
         let socket: Socket = "socket-id".into();
         let id: UserID = "test-id".into();
 
-        let cache = cache::new_cache();
+        let cache = cache::SharedClientCache::new_cache();
         cache.lock().await.clients.insert(socket.clone(), id);
 
         // when
         let msg = get_response_message("base-msg", &cache, socket).await;
 
         // then
-        assert_eq!("test-id: base-msg", msg);
+        assert_eq!("[test-id]: base-msg\r\n", msg);
     }
 }

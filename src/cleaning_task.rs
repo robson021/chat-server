@@ -1,21 +1,26 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio_schedule::{every, Job};
-
-pub fn clean(to_clean: Arc<Mutex<VecDeque<String>>>, interval_minutes: u32) {
-    tokio::task::spawn(async move {
-        let to_drain = 50;
-
-        every(interval_minutes)
-            .second()
-            .perform(|| async {
-                println!("task run");
-                let mut q = to_clean.lock().await;
-                if q.len() > to_drain {
-                    q.drain(..to_drain);
-                }
-            })
-            .await;
-    });
-}
+// use crate::cache::ChatHistory;
+// use std::collections::VecDeque;
+// use std::sync::Arc;
+// use tokio::sync::Mutex;
+// use tokio_schedule::{every, Job};
+//
+// const TO_DRAIN: usize = 50;
+//
+// pub async fn clean(history: &mut ChatHistory, interval_minutes: u32) {
+//     tokio::task::spawn(async move {
+//         every(interval_minutes)
+//             .second()
+//             .perform(|| async {
+//                 println!("Cleaning task running...");
+//                 drain_old_messages(history.history.clone()).await;
+//             })
+//             .await;
+//     });
+// }
+//
+// async fn drain_old_messages(history: Arc<Mutex<VecDeque<String>>>) {
+//     let mut guard = history.lock().await;
+//     if guard.len() > TO_DRAIN {
+//         guard.drain(..TO_DRAIN);
+//     }
+// }
