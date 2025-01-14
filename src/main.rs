@@ -1,8 +1,8 @@
-mod user_cache;
+mod cache;
+mod logger_config;
 
-use crate::user_cache::{Shared, Socket};
-use rand::distributions::Alphanumeric;
-use rand::Rng;
+use crate::cache::{ChatHistory, SharedClientCache, Socket};
+use log::{error, info};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -15,21 +15,28 @@ const HOST: &str = "localhost:8080";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    logger_config::setup_logger();
+
     let listener = TcpListener::bind(HOST).await.unwrap();
     let (tx, _rx) = broadcast::channel::<(String, SocketAddr)>(8);
 
-    println!("Running on {}", HOST);
+    // todo: collections based on read-write lock will be more performant
+    let user_cache = SharedClientCache::new_cache();
+    let chat_history = ChatHistory::new_chat_history();
 
-    // todo: concurrent map based on read-write lock will be more performant
-    let user_cache: Arc<Mutex<Shared>> = user_cache::new_cache();
+    info!("Running on {}", HOST);
 
     loop {
+        chat_history.lock().await.drain(999);
+
         match listener.accept().await {
             Ok((socket, addr)) => {
-                handle_connection(socket, addr, tx.clone(), Arc::clone(&user_cache)).await
+                let user_cache = Arc::clone(&user_cache);
+                let chat_history = Arc::clone(&chat_history);
+                handle_connection(socket, addr, tx.clone(), user_cache, chat_history).await
             }
-            Err(e) => eprintln!("Could not get client: {:?}", e),
-        }
+            Err(e) => error!("Could not get client: {:?}", e),
+        };
     }
 }
 
@@ -37,25 +44,35 @@ async fn handle_connection(
     mut socket: TcpStream,
     addr: SocketAddr,
     tx: Sender<(String, SocketAddr)>,
-    user_cache: Arc<Mutex<Shared>>,
+    user_cache: Arc<Mutex<SharedClientCache>>,
+    chat_history: Arc<Mutex<ChatHistory>>,
 ) {
-    let id: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect();
-
-    println!("Adding new user to the cache: {}.", id);
-    user_cache.lock().await.clients.insert(addr.to_string(), id);
-
     tokio::spawn(async move {
-        println!("New connection from {:?}", addr);
+        info!("New connection from {:?}", addr);
 
         let mut rx = tx.subscribe();
         let (reader, mut writer) = socket.split();
 
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
+
+        writer
+            .write_all("Enter nickname: ".as_bytes())
+            .await
+            .unwrap();
+        reader.read_line(&mut line).await.unwrap();
+
+        let id = line.trim().to_owned();
+        line.clear();
+
+        info!("Adding new user to the cache: {}.", id);
+        user_cache.lock().await.clients.insert(addr.to_string(), id);
+
+        let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
+        let mut old_messages = old_messages.join("");
+        old_messages.push_str("+---------------Start chatting---------------+\r\n");
+
+        writer.write_all(old_messages.as_bytes()).await.unwrap();
 
         loop {
             select! {
@@ -65,17 +82,18 @@ async fn handle_connection(
                             Some(id) => id,
                             None => "unknown".to_owned(),
                         };
-                        println!("Client disconnected: {:?}", user);
+                        info!("Client disconnected: {:?}", user);
                         break;
                     }
-                    let msg = (line.clone(), addr);
+                    let formatted_text = get_response_message(line.as_str(), &user_cache, addr.to_string()).await;
+                    let msg = (formatted_text.clone(), addr);
+                    chat_history.lock().await.insert(formatted_text.clone());
                     tx.send(msg).unwrap();
                     line.clear();
                 }
                 result = rx.recv() => {
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       let msg = get_response_message(&msg, &user_cache, sender_addr.to_string()).await;
                        writer.write_all(msg.as_bytes()).await.unwrap();
                     }
                 }
@@ -84,22 +102,27 @@ async fn handle_connection(
     });
 }
 
-async fn get_response_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Socket) -> String {
+async fn get_response_message(
+    msg: &str,
+    cache: &Arc<Mutex<SharedClientCache>>,
+    socket: Socket,
+) -> String {
     let id = match cache.lock().await.clients.get(&socket) {
-        Some(id) => id.clone(),
-        None => "unknown".to_owned(),
+        Some(id) => format!("[{}]", id),
+        None => "[unknown]".to_owned(),
     };
 
     let mut string = id;
     string.push_str(": ");
-    string.push_str(msg);
+    string.push_str(msg.trim());
+    string.push_str("\r\n");
     string
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::user_cache::UserID;
+    use crate::cache::UserID;
 
     #[tokio::test]
     async fn should_build_response_msg() {
@@ -107,13 +130,13 @@ mod tests {
         let socket: Socket = "socket-id".into();
         let id: UserID = "test-id".into();
 
-        let cache = user_cache::new_cache();
+        let cache = cache::SharedClientCache::new_cache();
         cache.lock().await.clients.insert(socket.clone(), id);
 
         // when
         let msg = get_response_message("base-msg", &cache, socket).await;
 
         // then
-        assert_eq!("test-id: base-msg", msg);
+        assert_eq!("[test-id]: base-msg\r\n", msg);
     }
 }
