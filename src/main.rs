@@ -1,11 +1,10 @@
+mod cache;
 mod cleaning_task;
-mod user_cache;
 
-use std::cmp::min;
-use std::collections::VecDeque;
-use crate::user_cache::{Shared, Socket};
+use crate::cache::{SharedClientCache, Socket};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -13,7 +12,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::broadcast::Sender;
 use tokio::sync::{broadcast, Mutex};
-use tokio_schedule::Job;
 
 const HOST: &str = "localhost:8080";
 
@@ -24,20 +22,11 @@ async fn main() {
 
     println!("Running on {}", HOST);
 
-    // todo: concurrent map based on read-write lock will be more performant
-    let user_cache: Arc<Mutex<Shared>> = user_cache::new_cache();
+    // todo: collections based on read-write lock will be more performant
+    let user_cache: Arc<Mutex<SharedClientCache>> = cache::new_cache();
+    let history: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
-    let mut q = VecDeque::from([1, 2 ,3]);
-    q.push_back(4);
-    q.push_back(5);
-    q.push_back(6);
-
-    q.drain(.. min(q.len(), 50));
-
-    println!("Queue: {:?}", q);
-
-    let history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    // cleaning_task::clean(Arc::clone(&history), 1);
+    cleaning_task::clean(Arc::clone(&history), 3);
 
     loop {
         match listener.accept().await {
@@ -53,7 +42,7 @@ async fn handle_connection(
     mut socket: TcpStream,
     addr: SocketAddr,
     tx: Sender<(String, SocketAddr)>,
-    user_cache: Arc<Mutex<Shared>>,
+    user_cache: Arc<Mutex<SharedClientCache>>,
 ) {
     let id: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -100,7 +89,11 @@ async fn handle_connection(
     });
 }
 
-async fn get_response_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Socket) -> String {
+async fn get_response_message(
+    msg: &str,
+    cache: &Arc<Mutex<SharedClientCache>>,
+    socket: Socket,
+) -> String {
     let id = match cache.lock().await.clients.get(&socket) {
         Some(id) => id.clone(),
         None => "unknown".to_owned(),
@@ -115,7 +108,7 @@ async fn get_response_message(msg: &str, cache: &Arc<Mutex<Shared>>, socket: Soc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::user_cache::UserID;
+    use crate::cache::UserID;
 
     #[tokio::test]
     async fn should_build_response_msg() {
@@ -123,7 +116,7 @@ mod tests {
         let socket: Socket = "socket-id".into();
         let id: UserID = "test-id".into();
 
-        let cache = user_cache::new_cache();
+        let cache = cache::new_cache();
         cache.lock().await.clients.insert(socket.clone(), id);
 
         // when
