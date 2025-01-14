@@ -1,7 +1,8 @@
 mod cache;
-mod cleaning_task;
+mod logger_config;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
+use log::{error, info};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -14,6 +15,8 @@ const HOST: &str = "localhost:8080";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    logger_config::setup_logger();
+
     let listener = TcpListener::bind(HOST).await.unwrap();
     let (tx, _rx) = broadcast::channel::<(String, SocketAddr)>(8);
 
@@ -21,19 +24,19 @@ async fn main() {
     let user_cache = SharedClientCache::new_cache();
     let chat_history = ChatHistory::new_chat_history();
 
-    // cleaning_task::clean(&mut history, 3).await;
-
-    println!("Running on {}", HOST);
+    info!("Running on {}", HOST);
 
     loop {
+        chat_history.lock().await.drain(999);
+
         match listener.accept().await {
             Ok((socket, addr)) => {
                 let user_cache = Arc::clone(&user_cache);
                 let chat_history = Arc::clone(&chat_history);
                 handle_connection(socket, addr, tx.clone(), user_cache, chat_history).await
             }
-            Err(e) => eprintln!("Could not get client: {:?}", e),
-        }
+            Err(e) => error!("Could not get client: {:?}", e),
+        };
     }
 }
 
@@ -45,7 +48,7 @@ async fn handle_connection(
     chat_history: Arc<Mutex<ChatHistory>>,
 ) {
     tokio::spawn(async move {
-        println!("New connection from {:?}", addr);
+        info!("New connection from {:?}", addr);
 
         let mut rx = tx.subscribe();
         let (reader, mut writer) = socket.split();
@@ -62,12 +65,12 @@ async fn handle_connection(
         let id = line.trim().to_owned();
         line.clear();
 
-        println!("Adding new user to the cache: {}.", id);
+        info!("Adding new user to the cache: {}.", id);
         user_cache.lock().await.clients.insert(addr.to_string(), id);
 
         let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
         let mut old_messages = old_messages.join("");
-        old_messages.push_str("+--------------------------------------+\r\n");
+        old_messages.push_str("+---------------Start chatting---------------+\r\n");
 
         writer.write_all(old_messages.as_bytes()).await.unwrap();
 
@@ -79,7 +82,7 @@ async fn handle_connection(
                             Some(id) => id,
                             None => "unknown".to_owned(),
                         };
-                        println!("Client disconnected: {:?}", user);
+                        info!("Client disconnected: {:?}", user);
                         break;
                     }
                     let formatted_text = get_response_message(line.as_str(), &user_cache, addr.to_string()).await;
@@ -89,10 +92,8 @@ async fn handle_connection(
                     line.clear();
                 }
                 result = rx.recv() => {
-                    // println!("History: {:?}", chat_history.lock().await.history);
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       // let msg = get_response_message(&msg, &user_cache, sender_addr.to_string()).await;
                        writer.write_all(msg.as_bytes()).await.unwrap();
                     }
                 }
