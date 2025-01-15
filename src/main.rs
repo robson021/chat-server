@@ -1,4 +1,6 @@
 mod cache;
+mod error;
+mod host;
 mod io_utils;
 mod logger_config;
 
@@ -6,27 +8,28 @@ use crate::cache::{ChatHistory, SharedClientCache, Socket};
 use log::{error, info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::broadcast::Sender;
 use tokio::sync::{broadcast, Mutex};
 
-// const HOST: &str = "0.0.0.0:8080";
-const HOST: &str = "localhost:8080";
-
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     logger_config::setup_logger();
 
-    let listener = TcpListener::bind(HOST).await.unwrap();
+    let host = host::get_host();
+
+    let listener = TcpListener::bind(host)
+        .await
+        .expect("Could not bind the host");
     let (tx, _rx) = broadcast::channel::<(String, SocketAddr)>(8);
 
     // todo: collections based on read-write lock will be more performant
     let user_cache = SharedClientCache::new_cache();
     let chat_history = ChatHistory::new_chat_history();
 
-    info!("Running on {}", HOST);
+    info!("Running on {}", host);
 
     loop {
         chat_history.lock().await.drain(999);
@@ -35,7 +38,7 @@ async fn main() {
             Ok((socket, addr)) => {
                 let user_cache = Arc::clone(&user_cache);
                 let chat_history = Arc::clone(&chat_history);
-                handle_connection(socket, addr, tx.clone(), user_cache, chat_history).await
+                handle_connection(socket, addr, tx.clone(), user_cache.clone(), chat_history).await;
             }
             Err(e) => error!("Could not get client: {:?}", e),
         };
@@ -52,16 +55,18 @@ async fn handle_connection(
     tokio::spawn(async move {
         info!("New connection from {:?}", addr);
 
-        let mut rx = tx.subscribe();
         let (reader, mut writer) = socket.split();
 
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
-        io_utils::write_all(&mut writer, "Enter nickname: ").await;
-        io_utils::read_line(&mut reader, &mut line).await;
+        io_utils::write_all(&mut writer, "Enter nickname: ")
+            .await
+            .unwrap();
+        io_utils::read_line(&mut reader, &mut line).await.unwrap();
 
         let id = line.trim().to_owned();
+        line.clear();
 
         if id.len() < 3 || id.len() > 32 {
             warn!("Invalid id: {}", id);
@@ -75,14 +80,15 @@ async fn handle_connection(
         let mut old_messages = old_messages.join("");
         old_messages.push_str("+---------------Start chatting---------------+\r\n");
 
-        writer.write_all(old_messages.as_bytes()).await.unwrap();
+        io_utils::write_all(&mut writer, &old_messages)
+            .await
+            .unwrap();
 
-        io_utils::write_all(&mut writer, &old_messages).await;
-
+        let mut rx = tx.subscribe();
         loop {
             select! {
-                result = reader.read_line(&mut line) => {
-                    if result.is_err() || result.unwrap() == 0 {
+                result = io_utils::read_line(&mut reader, &mut line) => {
+                    if result.is_err() {
                         let user = match user_cache.lock().await.clients.remove(&addr.to_string()) {
                             Some(id) => id,
                             None => "unknown".to_owned(),
@@ -90,10 +96,12 @@ async fn handle_connection(
                         info!("Client disconnected: {:?}", user);
                         break;
                     }
-                    let formatted_text = get_response_message(line.as_str(), &user_cache, addr.to_string()).await;
-                    let msg = (formatted_text.clone(), addr);
-                    chat_history.lock().await.insert(formatted_text.clone());
-                    tx.send(msg).unwrap();
+                    if !line.trim().is_empty() {
+                        let formatted_text = get_response_message(line.as_str(), &user_cache, addr.to_string()).await;
+                        let msg = (formatted_text.clone(), addr);
+                        chat_history.lock().await.insert(formatted_text.clone());
+                        tx.send(msg).unwrap();
+                    }
                     line.clear();
                 }
                 result = rx.recv() => {
@@ -103,7 +111,7 @@ async fn handle_connection(
                     }
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                        io_utils::write_all(&mut writer, &msg).await;
+                        let _result = io_utils::write_all(&mut writer, &msg).await;
                     }
                 }
             }
