@@ -1,4 +1,5 @@
 mod cache;
+mod io_utils;
 mod logger_config;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
@@ -57,18 +58,15 @@ async fn handle_connection(
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
-        writer
-            .write_all("Enter nickname: ".as_bytes())
-            .await
-            .unwrap();
-        reader.read_line(&mut line).await.unwrap();
+        io_utils::write_all(&mut writer, "Enter nickname: ").await;
+        io_utils::read_line(&mut reader, &mut line).await;
 
         let id = line.trim().to_owned();
-        line.clear();
 
-        if id.len() < 3 {
-            warn!("Too short id: {}", id);
-        }
+        if id.len() < 3 || id.len() > 32 {
+            warn!("Invalid id: {}", id);
+            return;
+        };
 
         info!("Adding new user to the cache: {}.", id);
         user_cache.lock().await.clients.insert(addr.to_string(), id);
@@ -78,6 +76,8 @@ async fn handle_connection(
         old_messages.push_str("+---------------Start chatting---------------+\r\n");
 
         writer.write_all(old_messages.as_bytes()).await.unwrap();
+
+        io_utils::write_all(&mut writer, &old_messages).await;
 
         loop {
             select! {
@@ -103,7 +103,7 @@ async fn handle_connection(
                     }
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       if (writer.write_all(msg.as_bytes()).await).is_err() { error!("Error writing to channel: {:?}", sender_addr) };
+                        io_utils::write_all(&mut writer, &msg).await;
                     }
                 }
             }
