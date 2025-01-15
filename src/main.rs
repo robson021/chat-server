@@ -5,7 +5,7 @@ mod io_utils;
 mod logger_config;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::BufReader;
@@ -16,6 +16,14 @@ use tokio::sync::{broadcast, Mutex};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    dbg!(&args);
+
+    let password = match args.len() > 1 {
+        true => args[1].trim().to_owned(),
+        false => "".to_owned(),
+    };
+
     logger_config::setup_logger();
 
     let host = host::get_host();
@@ -29,7 +37,7 @@ async fn main() {
     let user_cache = SharedClientCache::new_cache();
     let chat_history = ChatHistory::new_chat_history();
 
-    info!("Running on {}", host);
+    println!("Running on: {}", host);
 
     loop {
         chat_history.lock().await.drain(999);
@@ -38,7 +46,15 @@ async fn main() {
             Ok((socket, addr)) => {
                 let user_cache = Arc::clone(&user_cache);
                 let chat_history = Arc::clone(&chat_history);
-                handle_connection(socket, addr, tx.clone(), user_cache.clone(), chat_history).await;
+                handle_connection(
+                    socket,
+                    addr,
+                    tx.clone(),
+                    user_cache.clone(),
+                    chat_history,
+                    password.to_owned(),
+                )
+                .await;
             }
             Err(e) => error!("Could not get client: {:?}", e),
         };
@@ -51,6 +67,7 @@ async fn handle_connection(
     tx: Sender<(String, SocketAddr)>,
     user_cache: Arc<Mutex<SharedClientCache>>,
     chat_history: Arc<Mutex<ChatHistory>>,
+    password: String,
 ) {
     tokio::spawn(async move {
         info!("New connection from {:?}", addr);
@@ -60,6 +77,20 @@ async fn handle_connection(
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
+        if !password.is_empty() {
+            io_utils::write_all(&mut writer, "Enter password: ")
+                .await
+                .unwrap();
+            io_utils::read_line(&mut reader, &mut line).await.unwrap();
+
+            debug!("Received password: {}", password);
+
+            if password != line.trim() {
+                warn!("Passwords do not match for: {}", addr);
+                return;
+            }
+            line.clear();
+        }
         io_utils::write_all(&mut writer, "Enter nickname: ")
             .await
             .unwrap();
