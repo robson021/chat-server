@@ -16,15 +16,15 @@ use tokio::sync::{broadcast, Mutex};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    logger_config::setup_logger();
+
     let args: Vec<String> = std::env::args().collect();
-    dbg!(&args);
+    debug!("{:?}", args);
 
     let password = match args.len() > 1 {
         true => args[1].trim().to_owned(),
         false => "".to_owned(),
     };
-
-    logger_config::setup_logger();
 
     let host = host::get_host();
 
