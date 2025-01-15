@@ -2,7 +2,7 @@ mod cache;
 mod logger_config;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
-use log::{error, info};
+use log::{error, info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -11,6 +11,7 @@ use tokio::select;
 use tokio::sync::broadcast::Sender;
 use tokio::sync::{broadcast, Mutex};
 
+// const HOST: &str = "0.0.0.0:8080";
 const HOST: &str = "localhost:8080";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -65,6 +66,10 @@ async fn handle_connection(
         let id = line.trim().to_owned();
         line.clear();
 
+        if id.len() < 3 {
+            warn!("Too short id: {}", id);
+        }
+
         info!("Adding new user to the cache: {}.", id);
         user_cache.lock().await.clients.insert(addr.to_string(), id);
 
@@ -92,9 +97,13 @@ async fn handle_connection(
                     line.clear();
                 }
                 result = rx.recv() => {
+                    if result.is_err() {
+                        error!("Error receiving from channel: {:?}", addr);
+                        continue;
+                    }
                     let (msg, sender_addr) = result.unwrap();
                     if sender_addr != addr {
-                       writer.write_all(msg.as_bytes()).await.unwrap();
+                       if (writer.write_all(msg.as_bytes()).await).is_err() { error!("Error writing to channel: {:?}", sender_addr) };
                     }
                 }
             }
