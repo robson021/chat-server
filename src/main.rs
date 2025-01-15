@@ -37,7 +37,7 @@ async fn main() {
     let user_cache = SharedClientCache::new_cache();
     let chat_history = ChatHistory::new_chat_history();
 
-    println!("Running on: {}", host);
+    info!("Running on: {}", host);
 
     loop {
         chat_history.lock().await.drain(999);

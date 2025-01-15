@@ -1,34 +1,17 @@
 use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::console::Target;
-use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config, Root};
 use log4rs::encode::pattern::PatternEncoder;
 
-const LOG_PATTERN: &str = "{d} |{l}|: {m}{n}";
+const LOG_PATTERN: &str = "{h({d(%Y-%m-%d %H:%M:%S)(utc)} - {l}: {m}{n})}";
 
 pub fn setup_logger() {
-    debug_config();
-    // if cfg!(debug_assertions) {
-    //     debug_config();
-    // } else {
-    //     prod_config();
-    // }
-}
-
-fn prod_config() {
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::default()))
-        .build("chat-server.log")
-        .unwrap();
-
-    let file_cfg = Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(Root::builder().appender("logfile").build(LevelFilter::Info))
-        .unwrap();
-
-    log4rs::init_config(file_cfg).unwrap();
-    log::set_max_level(LevelFilter::Info);
+    if cfg!(debug_assertions) {
+        debug_config();
+    } else {
+        log4rs::init_file("./resources/logger_cfg.yml", Default::default()).unwrap();
+    }
 }
 
 fn debug_config() {
