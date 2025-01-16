@@ -3,12 +3,15 @@ mod error;
 mod host;
 mod io_utils;
 mod logger_config;
+mod profiles;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
+use crate::profiles::Profile;
 use log::{debug, error, info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::BufReader;
+use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::broadcast::Sender;
@@ -17,14 +20,6 @@ use tokio::sync::{broadcast, Mutex};
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     logger_config::setup_logger();
-
-    let args: Vec<String> = std::env::args().collect();
-    debug!("{:?}", args);
-
-    let password = match args.len() > 1 {
-        true => args[1].trim().to_owned(),
-        false => "".to_owned(),
-    };
 
     let host = host::get_host();
 
@@ -35,26 +30,18 @@ async fn main() {
 
     // todo: collections based on read-write lock will be more performant
     let user_cache = SharedClientCache::new_cache();
-    let chat_history = ChatHistory::new_chat_history();
+    let chat_history = ChatHistory::from_local_log_file();
 
     info!("Running on: {}", host);
 
     loop {
-        chat_history.lock().await.drain(999);
+        chat_history.lock().await.drain();
 
         match listener.accept().await {
             Ok((socket, addr)) => {
                 let user_cache = Arc::clone(&user_cache);
                 let chat_history = Arc::clone(&chat_history);
-                handle_connection(
-                    socket,
-                    addr,
-                    tx.clone(),
-                    user_cache.clone(),
-                    chat_history,
-                    password.to_owned(),
-                )
-                .await;
+                handle_connection(socket, addr, tx.clone(), user_cache.clone(), chat_history).await;
             }
             Err(e) => error!("Could not get client: {:?}", e),
         };
@@ -67,7 +54,6 @@ async fn handle_connection(
     tx: Sender<(String, SocketAddr)>,
     user_cache: Arc<Mutex<SharedClientCache>>,
     chat_history: Arc<Mutex<ChatHistory>>,
-    password: String,
 ) {
     tokio::spawn(async move {
         info!("New connection from {:?}", addr);
@@ -77,20 +63,20 @@ async fn handle_connection(
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
-        if !password.is_empty() {
-            io_utils::write_all(&mut writer, "Enter password: ")
-                .await
-                .unwrap();
-            io_utils::read_line(&mut reader, &mut line).await.unwrap();
-
-            debug!("Received password: {}", password);
-
-            if password != line.trim() {
-                warn!("Passwords do not match for: {}", addr);
+        if profiles::get_active_profile() == Profile::Release {
+            let args: Vec<String> = std::env::args().collect();
+            debug!("{:?}", args);
+            if args.len() < 2 {
+                panic!("Invalid number of arguments: {}", args.len());
+            }
+            let valid_password =
+                check_password(addr, &mut writer, &mut reader, &mut line, args[1].trim());
+            if !valid_password.await {
+                warn!("Password is invalid: {}", addr);
                 return;
             }
-            line.clear();
         }
+
         io_utils::write_all(&mut writer, "Enter nickname: ")
             .await
             .unwrap();
@@ -105,7 +91,7 @@ async fn handle_connection(
         };
 
         info!("Adding new user to the cache: {}.", id);
-        user_cache.lock().await.clients.insert(addr.to_string(), id);
+        user_cache.lock().await.insert(addr.to_string(), id);
 
         let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
         let mut old_messages = old_messages.join("");
@@ -116,11 +102,13 @@ async fn handle_connection(
             .unwrap();
 
         let mut rx = tx.subscribe();
+
         loop {
             select! {
                 result = io_utils::read_line(&mut reader, &mut line) => {
                     if result.is_err() {
-                        let user = match user_cache.lock().await.clients.remove(&addr.to_string()) {
+                        let socket: Socket  = addr.to_string();
+                        let user = match user_cache.lock().await.remove(&socket) {
                             Some(id) => id,
                             None => "unknown".to_owned(),
                         };
@@ -128,10 +116,7 @@ async fn handle_connection(
                         break;
                     }
                     if !line.trim().is_empty() {
-                        let formatted_text = get_response_message(line.as_str(), &user_cache, addr.to_string()).await;
-                        let msg = (formatted_text.clone(), addr);
-                        chat_history.lock().await.insert(formatted_text.clone());
-                        tx.send(msg).unwrap();
+                        io_utils::send_msg_update_chat_history(&line, addr, &tx, &user_cache, &chat_history).await;
                     }
                     line.clear();
                 }
@@ -150,42 +135,24 @@ async fn handle_connection(
     });
 }
 
-async fn get_response_message(
-    msg: &str,
-    cache: &Arc<Mutex<SharedClientCache>>,
-    socket: Socket,
-) -> String {
-    let id = match cache.lock().await.clients.get(&socket) {
-        Some(id) => format!("[{}]", id),
-        None => "[unknown]".to_owned(),
-    };
+async fn check_password(
+    addr: SocketAddr,
+    writer: &mut WriteHalf<'_>,
+    reader: &mut BufReader<ReadHalf<'_>>,
+    line: &mut String,
+    password: &str,
+) -> bool {
+    io_utils::write_all(writer, "Enter password: ")
+        .await
+        .unwrap();
+    io_utils::read_line(reader, line).await.unwrap();
 
-    let mut string = id;
-    string.push_str(": ");
-    string.push_str(msg.trim());
-    info!("Message: {}", string);
-    string.push_str("\r\n");
-    string
-}
+    debug!("Received password: {}", line);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cache::UserID;
-
-    #[tokio::test]
-    async fn should_build_response_msg() {
-        // given
-        let socket: Socket = "socket-id".into();
-        let id: UserID = "test-id".into();
-
-        let cache = cache::SharedClientCache::new_cache();
-        cache.lock().await.clients.insert(socket.clone(), id);
-
-        // when
-        let msg = get_response_message("base-msg", &cache, socket).await;
-
-        // then
-        assert_eq!("[test-id]: base-msg\r\n", msg);
+    if password != line.trim() {
+        warn!("Passwords do not match for: {}", addr);
+        return false;
     }
+    line.clear();
+    true
 }
