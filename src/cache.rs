@@ -80,10 +80,11 @@ impl ChatHistory {
                 s.push_str("\r\n");
                 s
             })
+            .rev()
             .collect();
 
         info!("Loaded {} lines from the old log file.", lines.len());
-        // debug!("Lines: {:?}", lines);
+        // dbg!("Lines: {:?}", &lines);
 
         Arc::new(Mutex::new(ChatHistory {
             history: VecDeque::from(lines),
