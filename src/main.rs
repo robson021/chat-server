@@ -1,12 +1,10 @@
 mod cache;
+mod config;
 mod error;
-mod host;
 mod io_utils;
 mod logger_config;
-mod profiles;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
-use crate::profiles::Profile;
 use log::{debug, error, info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,9 +17,10 @@ use tokio::sync::{broadcast, Mutex};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
-    logger_config::setup_logger();
+    let config = config::get_config();
+    logger_config::setup_logger(&config.profile);
 
-    let host = host::get_host();
+    let host = &config.host;
 
     let listener = TcpListener::bind(host)
         .await
@@ -30,7 +29,11 @@ async fn main() {
 
     // todo: collections based on read-write lock will be more performant
     let user_cache = SharedClientCache::new_cache();
-    let chat_history = ChatHistory::from_local_log_file(profiles::get_log_file());
+
+    let chat_history = match config.log_file {
+        Some(file) => ChatHistory::from_local_log_file(&file),
+        None => ChatHistory::empty_chat_history(),
+    };
 
     info!("Running on: {}", host);
 
@@ -41,7 +44,15 @@ async fn main() {
             Ok((socket, addr)) => {
                 let user_cache = Arc::clone(&user_cache);
                 let chat_history = Arc::clone(&chat_history);
-                handle_connection(socket, addr, tx.clone(), user_cache.clone(), chat_history).await;
+                handle_connection(
+                    socket,
+                    addr,
+                    tx.clone(),
+                    user_cache.clone(),
+                    chat_history,
+                    config.password.clone(),
+                )
+                .await;
             }
             Err(e) => error!("Could not get client: {:?}", e),
         };
@@ -54,6 +65,7 @@ async fn handle_connection(
     tx: Sender<(String, SocketAddr)>,
     user_cache: Arc<Mutex<SharedClientCache>>,
     chat_history: Arc<Mutex<ChatHistory>>,
+    password: Option<String>,
 ) {
     tokio::spawn(async move {
         info!("New connection from {:?}", addr);
@@ -63,15 +75,10 @@ async fn handle_connection(
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
-        if profiles::get_active_profile() == Profile::Release {
-            let args: Vec<String> = std::env::args().collect();
-            debug!("{:?}", args);
-            if args.len() < 2 {
-                panic!("Invalid number of arguments: {}", args.len());
-            }
+        if let Some(password) = password {
             let valid_password =
-                check_password(addr, &mut writer, &mut reader, &mut line, args[1].trim());
-            if !valid_password.await {
+                check_password(addr, &mut writer, &mut reader, &mut line, &password).await;
+            if !valid_password {
                 warn!("Password is invalid: {}", addr);
                 return;
             }

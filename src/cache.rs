@@ -51,7 +51,7 @@ impl ChatHistory {
             );
         }
     }
-    fn empty_chat_history() -> Arc<Mutex<ChatHistory>> {
+    pub fn empty_chat_history() -> Arc<Mutex<ChatHistory>> {
         Arc::new(Mutex::new(ChatHistory {
             history: VecDeque::new(),
         }))

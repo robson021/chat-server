@@ -1,5 +1,4 @@
-use crate::profiles;
-use crate::profiles::Profile;
+use crate::config::Profile;
 use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::console::Target;
@@ -9,8 +8,8 @@ use log4rs::encode::pattern::PatternEncoder;
 const LOG_FILE_PATH: &str = "./resources/logger_cfg.yml";
 const LOG_PATTERN: &str = "{h({d(%Y-%m-%d %H:%M:%S)(utc)} - {l}: {m}{n})}";
 
-pub fn setup_logger() {
-    match profiles::get_active_profile() {
+pub fn setup_logger(profile: &Profile) {
+    match profile {
         Profile::Dev => debug_config(),
         Profile::Release => log4rs::init_file(LOG_FILE_PATH, Default::default()).unwrap(),
     };
