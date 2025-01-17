@@ -2,7 +2,6 @@ mod cache;
 mod config;
 mod error;
 mod io_utils;
-mod logger_config;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
 use log::{debug, error, info, warn};
@@ -18,7 +17,7 @@ use tokio::sync::{broadcast, Mutex};
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let config = config::get_config();
-    logger_config::setup_logger(&config.profile);
+    config.setup_logger();
 
     let host = &config.host;
 
