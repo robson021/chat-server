@@ -48,6 +48,7 @@ pub async fn send_msg_update_chat_history(
     tx.send(msg).unwrap();
 }
 
+#[inline]
 async fn get_response_message(
     msg: &str,
     client_cache: &Arc<Mutex<SharedClientCache>>,

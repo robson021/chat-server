@@ -30,7 +30,7 @@ async fn main() {
 
     // todo: collections based on read-write lock will be more performant
     let user_cache = SharedClientCache::new_cache();
-    let chat_history = ChatHistory::from_local_log_file();
+    let chat_history = ChatHistory::from_local_log_file(profiles::get_log_file());
 
     info!("Running on: {}", host);
 

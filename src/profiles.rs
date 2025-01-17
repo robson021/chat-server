@@ -11,3 +11,7 @@ pub fn get_active_profile() -> Profile {
         Profile::Release
     }
 }
+
+pub fn get_log_file() -> &'static str {
+    "./log/chat-server.log"
+}

@@ -57,8 +57,8 @@ impl ChatHistory {
         }))
     }
 
-    pub fn from_local_log_file() -> Arc<Mutex<ChatHistory>> {
-        let file = File::open("./log/chat-server.log");
+    pub fn from_local_log_file(file: &str) -> Arc<Mutex<ChatHistory>> {
+        let file = File::open(file);
         if file.is_err() {
             warn!("Could not open log file.",);
             return Self::empty_chat_history();
@@ -89,5 +89,25 @@ impl ChatHistory {
         Arc::new(Mutex::new(ChatHistory {
             history: VecDeque::from(lines),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn load_chat_from_log() {
+        let chat = ChatHistory::from_local_log_file("./resources/test/chat-server.log")
+            .lock()
+            .await
+            .history
+            .clone();
+
+        assert_eq!(chat.len(), 9);
+
+        for msg in chat {
+            assert_eq!(msg, "[user]: example test message\r\n");
+        }
     }
 }
