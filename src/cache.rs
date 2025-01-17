@@ -70,7 +70,7 @@ impl ChatHistory {
             .lines()
             .take(TO_DRAIN)
             .map(|l| l.unwrap_or("".to_owned()))
-            .filter(|l| l.contains("INFO: Message: ["))
+            .filter(|l| l.contains("INFO: Message: |"))
             .collect();
 
         let lines: Vec<String> = lines
@@ -84,7 +84,7 @@ impl ChatHistory {
             .collect();
 
         info!("Loaded {} lines from the old log file.", lines.len());
-        // dbg!("Lines: {:?}", &lines);
+        dbg!("Lines: {:?}", &lines);
 
         Arc::new(Mutex::new(ChatHistory {
             history: VecDeque::from(lines),
@@ -104,10 +104,10 @@ mod tests {
             .history
             .clone();
 
-        assert_eq!(chat.len(), 9);
+        assert_eq!(chat.len(), 11);
 
         for msg in chat {
-            assert_eq!(msg, "[user]: example test message\r\n");
+            assert!(msg.ends_with("| [user]: Test message.\r\n"));
         }
     }
 }

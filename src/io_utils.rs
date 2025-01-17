@@ -1,5 +1,6 @@
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
 use crate::error::IoError;
+use chrono::Local;
 use log::{debug, info};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -54,12 +55,15 @@ async fn get_response_message(
     client_cache: &Arc<Mutex<SharedClientCache>>,
     socket: Socket,
 ) -> String {
+    let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut string = format!("|{}| ", time);
+
     let id = match client_cache.lock().await.get(&socket) {
         Some(id) => format!("[{}]", id),
         None => "[unknown]".to_owned(),
     };
 
-    let mut string = id;
+    string.push_str(&id);
     string.push_str(": ");
     string.push_str(msg.trim());
     info!("Message: {}", string);
@@ -86,6 +90,6 @@ mod tests {
         let msg = get_response_message("base-msg", &cache, socket).await;
 
         // then
-        assert_eq!("[test-id]: base-msg\r\n", msg);
+        assert!(msg.ends_with("| [test-id]: base-msg\r\n"));
     }
 }
