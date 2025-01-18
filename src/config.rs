@@ -54,7 +54,13 @@ pub fn get_config() -> Config {
         }
     } else {
         let args: Vec<String> = std::env::args().collect();
+        if args.len() < 2 {
+            panic!("No password specified");
+        }
         let password = args[1].trim().to_owned();
+        if password.len() < 5 {
+            panic!("Password must be at least 5 characters");
+        }
         Config {
             profile: Profile::Release,
             password: Some(password),

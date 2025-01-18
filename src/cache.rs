@@ -68,10 +68,12 @@ impl ChatHistory {
 
         let lines: Vec<String> = buf
             .lines()
-            .take(TO_DRAIN)
             .map(|l| l.unwrap_or("".to_owned()))
             .filter(|l| l.contains("INFO: Message: |"))
+            .take(TO_DRAIN)
             .collect();
+
+        dbg!("Loaded chat lines: {:?}", &lines);
 
         let lines: Vec<String> = lines
             .iter()
@@ -84,7 +86,7 @@ impl ChatHistory {
             .collect();
 
         info!("Loaded {} lines from the old log file.", lines.len());
-        dbg!("Lines: {:?}", &lines);
+        // dbg!("Lines: {:?}", &lines);
 
         Arc::new(Mutex::new(ChatHistory {
             history: VecDeque::from(lines),
