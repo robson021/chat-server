@@ -73,7 +73,7 @@ impl ChatHistory {
             .take(TO_DRAIN)
             .collect();
 
-        dbg!("Loaded chat lines: {:?}", &lines);
+        dbg!("Loaded chat lines (reversed): {:?}", &lines);
 
         let lines: Vec<String> = lines
             .iter()
