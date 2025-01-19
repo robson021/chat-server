@@ -22,16 +22,14 @@ pub async fn write_all(writer: &mut WriteHalf<'_>, msg: &str) -> Result<(), IoEr
 }
 
 #[inline]
-pub async fn read_line(
-    reader: &mut BufReader<ReadHalf<'_>>,
-    line: &mut String,
-) -> Result<(), IoError> {
-    match reader.read_line(line).await {
+pub async fn read_line(reader: &mut BufReader<ReadHalf<'_>>) -> Result<String, IoError> {
+    let mut line = String::new();
+    match reader.read_line(&mut line).await {
         Err(_) => {
             debug!("Error reading from channel: {:?}", line);
             Err(IoError::UserDisconnected)
         }
-        _ => Ok(()),
+        _ => Ok(line),
     }
 }
 

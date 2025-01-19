@@ -4,7 +4,7 @@ mod error;
 mod io_utils;
 
 use crate::cache::{ChatHistory, SharedClientCache, Socket};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::BufReader;
@@ -67,51 +67,44 @@ async fn handle_connection(
     password: Option<String>,
 ) {
     tokio::spawn(async move {
-        info!("New connection from {:?}", addr);
-
+        trace!("New connection from {:?}", addr);
         let (reader, mut writer) = socket.split();
-
         let mut reader = BufReader::new(reader);
-        let mut line = String::new();
-
-        if let Some(password) = password {
-            let valid_password =
-                check_password(addr, &mut writer, &mut reader, &mut line, &password).await;
-            if !valid_password {
-                warn!("Password is invalid: {}", addr);
-                return;
+        {
+            if let Some(password) = password {
+                let valid_password = check_password(&mut writer, &mut reader, &password).await;
+                if !valid_password {
+                    debug!("Password is invalid: {}", addr);
+                    return;
+                }
             }
+            io_utils::write_all(&mut writer, "Enter nickname: ")
+                .await
+                .unwrap();
+            let line = io_utils::read_line(&mut reader).await.unwrap();
+            let id = line.trim().to_owned();
+
+            if id.len() < 3 || id.len() > 32 {
+                warn!("Invalid id: {}", id);
+                return;
+            };
+
+            info!("Adding new user to the cache: {}.", id);
+            user_cache.lock().await.insert(addr.to_string(), id);
+
+            let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
+            let mut old_messages = old_messages.join("");
+            old_messages.push_str("+---------------Start chatting---------------+\r\n");
+
+            io_utils::write_all(&mut writer, &old_messages)
+                .await
+                .unwrap();
         }
-
-        io_utils::write_all(&mut writer, "Enter nickname: ")
-            .await
-            .unwrap();
-        io_utils::read_line(&mut reader, &mut line).await.unwrap();
-
-        let id = line.trim().to_owned();
-        line.clear();
-
-        if id.len() < 3 || id.len() > 32 {
-            warn!("Invalid id: {}", id);
-            return;
-        };
-
-        info!("Adding new user to the cache: {}.", id);
-        user_cache.lock().await.insert(addr.to_string(), id);
-
-        let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
-        let mut old_messages = old_messages.join("");
-        old_messages.push_str("+---------------Start chatting---------------+\r\n");
-
-        io_utils::write_all(&mut writer, &old_messages)
-            .await
-            .unwrap();
-
         let mut rx = tx.subscribe();
 
         loop {
             select! {
-                result = io_utils::read_line(&mut reader, &mut line) => {
+                result = io_utils::read_line(&mut reader) => {
                     if result.is_err() {
                         let socket: Socket  = addr.to_string();
                         let user = match user_cache.lock().await.remove(&socket) {
@@ -121,10 +114,10 @@ async fn handle_connection(
                         info!("Client disconnected: {:?}", user);
                         break;
                     }
+                    let line = result.unwrap();
                     if !line.trim().is_empty() {
                         io_utils::send_msg_update_chat_history(&line, addr, &tx, &user_cache, &chat_history).await;
                     }
-                    line.clear();
                 }
                 result = rx.recv() => {
                     if result.is_err() {
@@ -142,23 +135,15 @@ async fn handle_connection(
 }
 
 async fn check_password(
-    addr: SocketAddr,
     writer: &mut WriteHalf<'_>,
     reader: &mut BufReader<ReadHalf<'_>>,
-    line: &mut String,
     password: &str,
 ) -> bool {
     io_utils::write_all(writer, "Enter password: ")
         .await
         .unwrap();
-    io_utils::read_line(reader, line).await.unwrap();
+    let line = io_utils::read_line(reader).await.unwrap();
 
     debug!("Received password: {}", line);
-
-    if password != line.trim() {
-        warn!("Passwords do not match for: {}", addr);
-        return false;
-    }
-    line.clear();
-    true
+    password == line.trim()
 }
