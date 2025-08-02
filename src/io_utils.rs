@@ -54,10 +54,10 @@ async fn get_response_message(
     socket: Socket,
 ) -> String {
     let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let mut string = format!("|{}| ", time);
+    let mut string = format!("|{time}| ");
 
     let id = match client_cache.lock().await.get(&socket) {
-        Some(id) => format!("[{}]", id),
+        Some(id) => format!("[{id}]"),
         None => "[unknown]".to_owned(),
     };
 
