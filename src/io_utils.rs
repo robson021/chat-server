@@ -1,13 +1,11 @@
-use crate::cache::{ChatHistory, SharedClientCache, Socket};
+use crate::cache::{SharedChatHistory, SharedClientCache, Socket};
 use crate::error::IoError;
 use chrono::Local;
 use log::{debug, info};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::sync::broadcast::Sender;
-use tokio::sync::Mutex;
 
 #[inline]
 pub async fn write_all(writer: &mut WriteHalf<'_>, msg: &str) -> Result<(), IoError> {
@@ -38,25 +36,25 @@ pub async fn send_msg_update_chat_history(
     msg: &str,
     addr: SocketAddr,
     tx: &Sender<(String, SocketAddr)>,
-    user_cache: &Arc<Mutex<SharedClientCache>>,
-    chat_history: &Arc<Mutex<ChatHistory>>,
+    user_cache: &SharedClientCache,
+    chat_history: &SharedChatHistory,
 ) {
     let formatted_text = get_response_message(msg, user_cache, addr.to_string()).await;
     let msg = (formatted_text.clone(), addr);
-    chat_history.lock().await.insert(formatted_text.clone());
+    chat_history.write().await.insert(formatted_text.clone());
     tx.send(msg).unwrap();
 }
 
 #[inline]
 async fn get_response_message(
     msg: &str,
-    client_cache: &Arc<Mutex<SharedClientCache>>,
+    client_cache: &SharedClientCache,
     socket: Socket,
 ) -> String {
     let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut string = format!("|{time}| ");
 
-    let id = match client_cache.lock().await.get(&socket) {
+    let id = match client_cache.read().await.get(&socket) {
         Some(id) => format!("[{id}]"),
         None => "[unknown]".to_owned(),
     };
@@ -72,8 +70,7 @@ async fn get_response_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache;
-    use crate::cache::UserID;
+    use crate::cache::{ClientCache, UserID};
 
     #[tokio::test]
     async fn should_build_response_msg() {
@@ -81,8 +78,8 @@ mod tests {
         let socket: Socket = "socket-id".into();
         let id: UserID = "test-id".into();
 
-        let cache = cache::SharedClientCache::new_cache();
-        cache.lock().await.insert(socket.clone(), id);
+        let cache = ClientCache::new_cache();
+        cache.write().await.insert(socket.clone(), id);
 
         // when
         let msg = get_response_message("base-msg", &cache, socket).await;

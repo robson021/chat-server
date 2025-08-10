@@ -3,7 +3,7 @@ mod config;
 mod error;
 mod io_utils;
 
-use crate::cache::{ChatHistory, SharedClientCache, Socket};
+use crate::cache::{ChatHistory, ClientCache, SharedChatHistory, SharedClientCache, Socket};
 use log::{debug, error, info, trace, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -11,8 +11,8 @@ use tokio::io::BufReader;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::Sender;
-use tokio::sync::{broadcast, Mutex};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
@@ -26,8 +26,7 @@ async fn main() {
         .expect("Could not bind the host");
     let (tx, _rx) = broadcast::channel::<(String, SocketAddr)>(8);
 
-    // todo: collections based on read-write lock will be more performant
-    let user_cache = SharedClientCache::new_cache();
+    let user_cache = ClientCache::new_cache();
 
     let chat_history = match config.log_file {
         Some(file) => ChatHistory::from_local_log_file(&file),
@@ -37,7 +36,7 @@ async fn main() {
     info!("Running on: {}", host);
 
     loop {
-        chat_history.lock().await.drain();
+        chat_history.write().await.drain();
 
         match listener.accept().await {
             Ok((socket, addr)) => {
@@ -62,8 +61,8 @@ async fn handle_connection(
     mut socket: TcpStream,
     addr: SocketAddr,
     tx: Sender<(String, SocketAddr)>,
-    user_cache: Arc<Mutex<SharedClientCache>>,
-    chat_history: Arc<Mutex<ChatHistory>>,
+    user_cache: SharedClientCache,
+    chat_history: SharedChatHistory,
     password: Option<String>,
 ) {
     tokio::spawn(async move {
@@ -90,9 +89,9 @@ async fn handle_connection(
             };
 
             info!("Adding new user to the cache: {}.", id);
-            user_cache.lock().await.insert(addr.to_string(), id);
+            user_cache.write().await.insert(addr.to_string(), id);
 
-            let old_messages: Vec<String> = chat_history.lock().await.history.clone().into();
+            let old_messages: Vec<String> = chat_history.read().await.history.clone().into();
             let mut old_messages = old_messages.join("");
             old_messages.push_str("+---------------Start chatting---------------+\r\n");
 
@@ -107,7 +106,7 @@ async fn handle_connection(
                 result = io_utils::read_line(&mut reader) => {
                     if result.is_err() {
                         let socket: Socket  = addr.to_string();
-                        let user = match user_cache.lock().await.remove(&socket) {
+                        let user = match user_cache.write().await.remove(&socket) {
                             Some(id) => id,
                             None => "unknown".to_owned(),
                         };

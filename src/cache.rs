@@ -4,18 +4,20 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::BufRead;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 pub type Socket = String;
 pub type UserID = String;
 
-pub struct SharedClientCache {
+pub struct ClientCache {
     clients: HashMap<Socket, UserID>,
 }
 
-impl SharedClientCache {
-    pub fn new_cache() -> Arc<Mutex<SharedClientCache>> {
-        Arc::new(Mutex::new(SharedClientCache {
+pub type SharedClientCache = Arc<RwLock<ClientCache>>;
+
+impl ClientCache {
+    pub fn new_cache() -> SharedClientCache {
+        Arc::new(RwLock::new(ClientCache {
             clients: HashMap::new(),
         }))
     }
@@ -36,6 +38,8 @@ pub struct ChatHistory {
     pub history: VecDeque<String>,
 }
 
+pub type SharedChatHistory = Arc<RwLock<ChatHistory>>;
+
 const TO_DRAIN: usize = 999;
 
 impl ChatHistory {
@@ -51,13 +55,13 @@ impl ChatHistory {
             );
         }
     }
-    pub fn empty_chat_history() -> Arc<Mutex<ChatHistory>> {
-        Arc::new(Mutex::new(ChatHistory {
+    pub fn empty_chat_history() -> SharedChatHistory {
+        Arc::new(RwLock::new(ChatHistory {
             history: VecDeque::new(),
         }))
     }
 
-    pub fn from_local_log_file(file: &str) -> Arc<Mutex<ChatHistory>> {
+    pub fn from_local_log_file(file: &str) -> SharedChatHistory {
         let file = File::open(file);
         if file.is_err() {
             warn!("Could not open log file.",);
@@ -88,7 +92,7 @@ impl ChatHistory {
         info!("Loaded {} lines from the old log file.", lines.len());
         // dbg!("Lines: {:?}", &lines);
 
-        Arc::new(Mutex::new(ChatHistory {
+        Arc::new(RwLock::new(ChatHistory {
             history: VecDeque::from(lines),
         }))
     }
@@ -101,7 +105,7 @@ mod tests {
     #[tokio::test]
     async fn load_chat_from_log() {
         let chat = ChatHistory::from_local_log_file("./resources/test/chat-server.log")
-            .lock()
+            .read()
             .await
             .history
             .clone();
